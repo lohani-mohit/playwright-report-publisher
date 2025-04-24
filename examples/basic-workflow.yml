@@ -1,4 +1,4 @@
-name: Playwright Tests
+name: Playwright Tests with Report Publishing
 
 on:
   # Trigger the workflow on push or pull request events but only for the main branch
@@ -26,19 +26,42 @@ on:
 
 jobs:
   test:
+    name: Run Tests and Publish Report
     runs-on: ubuntu-latest
-    name: Run Playwright Tests
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Run Playwright tests and publish reports
-        uses: speechify/playwright-report-publisher@v1
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
         with:
-          # Use workflow_dispatch inputs if available, otherwise use defaults
-          test-tag: ${{ github.event.inputs.test-tag || '@regression' }}
-          environment: ${{ github.event.inputs.environment || 'dev' }}
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: "tests/package-lock.json"
+
+      - name: Install dependencies
+        run: |
+          cd tests
+          npm ci
+
+      - name: Install Playwright browsers
+        run: |
+          cd tests
+          npx playwright install --with-deps chromium
+
+      - name: Run Playwright tests
+        id: run-tests
+        run: |
+          cd tests
+          npx playwright test
+        continue-on-error: true
+
+      - name: Publish Playwright Report
+        uses: your-username/playwright-report-publisher@v1
+        with:
+          report-directory: "tests/playwright-report"
+          environment: "dev"
+          report-prefix: "e2e-tests"
           post-to: "both"
           gcp-sa-key: ${{ secrets.GCP_SA_KEY }}
           slack-webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          test-status: ${{ steps.run-tests.outcome == 'success' && 'passed' || 'failed' }}

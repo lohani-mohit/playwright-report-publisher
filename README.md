@@ -1,107 +1,110 @@
-# Playwright Report Publisher Action
+# Playwright Report Publisher
 
 [![GitHub release](https://img.shields.io/github/release/speechify/playwright-report-publisher.svg)](https://github.com/speechify/playwright-report-publisher/releases)
 [![License](https://img.shields.io/github/license/speechify/playwright-report-publisher.svg)](LICENSE)
 
-A GitHub Action to run Playwright tests, publish reports to Google Cloud Storage (GCS), and post results to Slack and GitHub PR comments.
+A GitHub Action for publishing Playwright test reports to Google Cloud Storage (GCS), Slack, and GitHub PR comments.
 
 ## Features
 
-- ✅ Run Playwright tests with specific test tags
-- 🌐 Test against different environments (dev, preview, prod)
-- ☁️ Upload test reports to Google Cloud Storage (GCS)
-- 💬 Post test results to Slack
-- 💬 Post test results as comments on GitHub pull requests
-- 🔄 Support for visual comparison tests
-
-## Screenshot
-
-![Playwright Report in GitHub PR Comment](https://user-images.githubusercontent.com/your-username/your-repo/raw/main/docs/images/pr-comment-example.png)
+- ☁️ Upload Playwright HTML reports to Google Cloud Storage (GCS)
+- 💬 Post test results to Slack with customizable messages
+- 💬 Add test result comments to GitHub Pull Requests
+- 🔄 Works with any Playwright test setup
 
 ## Usage
 
-### Basic Usage
+This action is designed to be used after your Playwright tests have been run. It will take the generated report and publish it to various destinations.
+
+### Basic Example
 
 ```yaml
-name: Playwright Tests
+- name: Run Playwright tests
+  id: run-tests
+  run: npx playwright test
+  continue-on-error: true
 
-on:
-  pull_request:
-    branches: [main, develop]
-
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Run Playwright tests
-        uses: speechify/playwright-report-publisher@v1
-        with:
-          test-tag: "@regression"
-          environment: "dev"
-          post-to: "both"
-          gcp-sa-key: ${{ secrets.GCP_SA_KEY }}
-          slack-webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+- name: Publish Playwright Report
+  uses: speechify/playwright-report-publisher@v1
+  with:
+    environment: "dev"
+    report-prefix: "e2e-tests"
+    gcp-sa-key: ${{ secrets.GCP_SA_KEY }}
+    slack-webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+    test-status: ${{ steps.run-tests.outcome == 'success' && 'passed' || 'failed' }}
 ```
 
 ### Complete Example with All Options
 
 ```yaml
-name: Playwright Tests with All Options
+name: Playwright Tests with Report Publishing
 
 on:
+  push:
+    branches: [main]
   pull_request:
-    branches: [main, develop]
-  schedule:
-    - cron: "0 2 * * *" # Run daily at 2 AM UTC
-  workflow_dispatch:
-    inputs:
-      test-tag:
-        description: "Test tag to run"
-        required: true
-        default: "@regression"
-      environment:
-        description: "Environment to test"
-        required: true
-        default: "dev"
+    branches: [main]
 
 jobs:
   test:
+    name: Run Tests and Publish Report
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: "tests/package-lock.json"
+
+      - name: Install dependencies
+        run: |
+          cd tests
+          npm ci
+
+      - name: Install Playwright browsers
+        run: |
+          cd tests
+          npx playwright install --with-deps chromium
+
       - name: Run Playwright tests
+        id: run-tests
+        run: |
+          cd tests
+          npx playwright test
+        continue-on-error: true
+
+      - name: Publish Playwright Report
         uses: speechify/playwright-report-publisher@v1
         with:
-          # Required inputs
-          test-tag: ${{ github.event.inputs.test-tag || '@regression' }}
-          environment: ${{ github.event.inputs.environment || 'dev' }}
-          gcp-sa-key: ${{ secrets.GCP_SA_KEY }}
-
-          # Optional inputs with defaults
+          report-directory: "tests/playwright-report"
+          environment: "dev"
+          report-prefix: "e2e-tests"
           post-to: "both"
           working-directory: "tests"
           gcs-bucket: "my-playwright-reports"
-          node-version: "20.11.1"
           github-token: ${{ github.token }}
+          gcp-sa-key: ${{ secrets.GCP_SA_KEY }}
           slack-webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          test-status: ${{ steps.run-tests.outcome == 'success' && 'passed' || 'failed' }}
 ```
 
 ## Inputs
 
-| Input               | Description                                    | Required | Default                      |
-| ------------------- | ---------------------------------------------- | -------- | ---------------------------- |
-| `test-tag`          | Test tag to run (e.g., @sanity, @regression)   | Yes      | `@regression`                |
-| `environment`       | Environment to run tests against               | Yes      | `dev`                        |
-| `gcp-sa-key`        | GCP service account key (JSON) for GCS uploads | Yes      | -                            |
-| `post-to`           | Where to post results (github, slack, both)    | No       | `both`                       |
-| `working-directory` | Directory containing Playwright tests          | No       | `tests`                      |
-| `gcs-bucket`        | GCS bucket name for uploading reports          | No       | `website_playwright_reports` |
-| `node-version`      | Node.js version to use                         | No       | `20.11.1`                    |
-| `github-token`      | GitHub token for PR comments                   | No       | `github.token`               |
-| `slack-webhook-url` | Slack webhook URL for posting results          | No       | -                            |
+| Input               | Description                                       | Required | Default                      |
+| ------------------- | ------------------------------------------------- | -------- | ---------------------------- |
+| `report-directory`  | Directory containing the Playwright report        | No       | `playwright-report`          |
+| `environment`       | Environment the tests were run against            | Yes      | `dev`                        |
+| `gcp-sa-key`        | GCP service account key (JSON) for GCS uploads    | Yes      | -                            |
+| `post-to`           | Where to post results (github, slack, both, none) | No       | `both`                       |
+| `working-directory` | Directory containing Playwright tests             | No       | `tests`                      |
+| `gcs-bucket`        | GCS bucket name for uploading reports             | No       | `website_playwright_reports` |
+| `report-prefix`     | Prefix for the report folder in GCS               | No       | `test-report`                |
+| `github-token`      | GitHub token for PR comments                      | No       | `github.token`               |
+| `slack-webhook-url` | Slack webhook URL for posting results             | No       | -                            |
+| `test-status`       | Status of the tests (passed or failed)            | No       | Determined from report       |
 
 ## Outputs
 
@@ -112,16 +115,15 @@ jobs:
 
 ## How It Works
 
-1. **Test Execution**: The action runs Playwright tests with the specified tag
-2. **Report Generation**: A test report is generated in HTML and JSON formats
-3. **GCS Upload**: The report is uploaded to Google Cloud Storage with a timestamp
-4. **Result Posting**: Results are posted to Slack and/or GitHub PR comments
+1. **Report Location**: The action looks for Playwright reports in the specified directory (defaults to `playwright-report`)
+2. **GCS Upload**: The report is uploaded to Google Cloud Storage with a timestamp
+3. **Result Posting**: Results are posted to Slack and/or GitHub PR comments based on your configuration
 
 ## Requirements
 
 For this action to work correctly, you need:
 
-1. **Playwright Tests**: Your repository should have Playwright tests set up
+1. **Playwright Tests**: Your repository should have Playwright tests set up and already run
 2. **GCP Service Account**: A Google Cloud service account with permissions to upload to a GCS bucket
 3. **Slack Webhook** (optional): A Slack webhook URL if you want to post results to Slack
 
@@ -146,28 +148,29 @@ For this action to work correctly, you need:
 The default format for the report URL is:
 
 ```
-https://storage.googleapis.com/{bucket}/{tag}-{env}/{timestamp}/index.html
+https://storage.googleapis.com/{bucket}/{prefix}-{env}/{timestamp}/index.html
 ```
 
 You can customize this by forking the action and modifying the `generate-paths` step in the action.yml file.
 
 ## Examples
 
-### Running Visual Comparison Tests
+### Publishing Reports with Custom Directory
 
 ```yaml
-- name: Run Visual Comparison Tests
+- name: Publish Visual Comparison Test Reports
   uses: speechify/playwright-report-publisher@v1
   with:
-    test-tag: "@visualcomparison"
+    report-directory: "visual-tests/playwright-report"
     environment: "prod"
+    report-prefix: "visual-comparison"
     gcp-sa-key: ${{ secrets.GCP_SA_KEY }}
 ```
 
-### Daily Sanity Tests with Slack Notifications Only
+### Daily Test Reports with Slack Notifications Only
 
 ```yaml
-name: Daily Sanity Tests
+name: Daily Test Reports
 
 on:
   schedule:
@@ -179,11 +182,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run Sanity Tests
+      # Steps to run your tests...
+
+      - name: Publish Test Reports
         uses: speechify/playwright-report-publisher@v1
         with:
-          test-tag: "@sanity"
           environment: "prod"
+          report-prefix: "daily-tests"
           post-to: "slack"
           gcp-sa-key: ${{ secrets.GCP_SA_KEY }}
           slack-webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}

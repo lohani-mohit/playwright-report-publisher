@@ -1,22 +1,22 @@
 name: "Playwright Report Publisher"
-description: "Run Playwright tests, publish reports to GCS, and post results to Slack and GitHub PR comments"
+description: "Publish Playwright test reports to GCS, Slack, and GitHub PR comments"
 author: "Speechify"
 branding:
-  icon: "check-square"
+  icon: "upload-cloud"
   color: "blue"
 
 inputs:
-  test-tag:
-    description: "Test tag to run (e.g., @sanity, @regression, @visualcomparison)"
-    required: true
-    default: "@regression"
+  report-directory:
+    description: "Directory containing the Playwright report"
+    required: false
+    default: "playwright-report"
   environment:
-    description: "Environment to run tests against"
+    description: "Environment the tests were run against"
     required: true
     default: "dev"
   post-to:
-    description: "Where to post the results"
-    required: true
+    description: "Where to post the results (github, slack, both, or none)"
+    required: false
     default: "both"
   working-directory:
     description: "Directory containing Playwright tests"
@@ -26,10 +26,10 @@ inputs:
     description: "GCS bucket name for uploading reports"
     required: false
     default: "website_playwright_reports"
-  node-version:
-    description: "Node.js version to use"
+  report-prefix:
+    description: "Prefix for the report folder in GCS (e.g., 'regression', 'sanity')"
     required: false
-    default: "20.11.1"
+    default: "test-report"
   github-token:
     description: "GitHub token for PR comments"
     required: true
@@ -39,6 +39,9 @@ inputs:
     required: true
   slack-webhook-url:
     description: "Slack webhook URL for posting results"
+    required: false
+  test-status:
+    description: "Status of the tests (passed or failed). If not provided, will be determined from the report."
     required: false
 
 outputs:
@@ -52,56 +55,6 @@ outputs:
 runs:
   using: "composite"
   steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-
-    - name: Set up Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: ${{ inputs.node-version }}
-        cache: "npm"
-        cache-dependency-path: "${{ inputs.working-directory }}/package-lock.json"
-
-    - name: Install dependencies
-      shell: bash
-      run: |
-        cd ${{ inputs.working-directory }}
-        npm ci
-
-    - name: Install Playwright browsers
-      shell: bash
-      run: |
-        cd ${{ inputs.working-directory }}
-        npx playwright install --with-deps chromium
-
-    - name: Determine base URL
-      id: get-url
-      shell: bash
-      run: |
-        ENV=${{ inputs.environment }}
-
-        # Set the appropriate URL based on environment
-        if [[ "$ENV" == "dev" ]]; then
-          echo "test-url=https://website-dev.speechify.dev/" >> $GITHUB_OUTPUT
-        elif [[ "$ENV" == "preview" ]]; then
-          echo "test-url=https://website.speechify.dev/" >> $GITHUB_OUTPUT
-        elif [[ "$ENV" == "prod" ]]; then
-          echo "test-url=https://speechify.com/" >> $GITHUB_OUTPUT
-        else
-          echo "test-url=http://localhost:3000" >> $GITHUB_OUTPUT
-        fi
-
-    - name: Run Playwright tests
-      shell: bash
-      id: run-tests
-      run: |
-        cd ${{ inputs.working-directory }}
-        npx playwright test --grep ${{ inputs.test-tag }}
-      env:
-        ENV: ${{ inputs.environment }}
-        PLAYWRIGHT_TEST_BASE_URL: ${{ steps.get-url.outputs.test-url }}
-      continue-on-error: true
-
     - name: Setup GCP authentication
       uses: google-github-actions/auth@v1
       with:
@@ -115,15 +68,12 @@ runs:
       shell: bash
       run: |
         TIMESTAMP=$(date +%s)
-        TEST_TAG="${{ inputs.test-tag }}"
         ENV="${{ inputs.environment }}"
-
-        # Remove @ from tag for folder name
-        TAG_FOLDER=$(echo $TEST_TAG | sed 's/@//g')
+        PREFIX="${{ inputs.report-prefix }}"
 
         # Set GCS path
-        GCS_PATH="gs://${{ inputs.gcs-bucket }}/${TAG_FOLDER}-${ENV}/${TIMESTAMP}"
-        REPORT_URL="https://storage.googleapis.com/${{ inputs.gcs-bucket }}/${TAG_FOLDER}-${ENV}/${TIMESTAMP}/index.html"
+        GCS_PATH="gs://${{ inputs.gcs-bucket }}/${PREFIX}-${ENV}/${TIMESTAMP}"
+        REPORT_URL="https://storage.googleapis.com/${{ inputs.gcs-bucket }}/${PREFIX}-${ENV}/${TIMESTAMP}/index.html"
 
         echo "timestamp=${TIMESTAMP}" >> $GITHUB_OUTPUT
         echo "gcs-path=${GCS_PATH}" >> $GITHUB_OUTPUT
@@ -133,7 +83,11 @@ runs:
       shell: bash
       run: |
         cd ${{ inputs.working-directory }}
-        gsutil -m cp -r playwright-report/html-report/* ${{ steps.generate-paths.outputs.gcs-path }}
+        if [ -d "${{ inputs.report-directory }}/html-report" ]; then
+          gsutil -m cp -r ${{ inputs.report-directory }}/html-report/* ${{ steps.generate-paths.outputs.gcs-path }}
+        else
+          gsutil -m cp -r ${{ inputs.report-directory }}/* ${{ steps.generate-paths.outputs.gcs-path }}
+        fi
         echo "Report uploaded to: ${{ steps.generate-paths.outputs.report-url }}"
 
     - name: Check test status
@@ -141,10 +95,23 @@ runs:
       shell: bash
       run: |
         cd ${{ inputs.working-directory }}
-        if grep -q '"status":"failed"' playwright-report/pw_report.json; then
-          echo "status=failed" >> $GITHUB_OUTPUT
+
+        # If test status is provided as input, use that
+        if [ -n "${{ inputs.test-status }}" ]; then
+          echo "status=${{ inputs.test-status }}" >> $GITHUB_OUTPUT
+          exit 0
+        fi
+
+        # Otherwise determine from report
+        if [ -f "${{ inputs.report-directory }}/pw_report.json" ]; then
+          if grep -q '"status":"failed"' ${{ inputs.report-directory }}/pw_report.json; then
+            echo "status=failed" >> $GITHUB_OUTPUT
+          else
+            echo "status=passed" >> $GITHUB_OUTPUT
+          fi
         else
-          echo "status=passed" >> $GITHUB_OUTPUT
+          echo "status=unknown" >> $GITHUB_OUTPUT
+          echo "Warning: Could not determine test status from report"
         fi
 
     - name: Get last commit message
@@ -166,8 +133,8 @@ runs:
         REPORT_URL: ${{ steps.generate-paths.outputs.report-url }}
         LAST_COMMIT_MSG: ${{ steps.get-commit.outputs.last-commit }}
         TEST_STATUS: ${{ steps.check-status.outputs.status }}
-        TEST_TAG: ${{ inputs.test-tag }}
         ENVIRONMENT: ${{ inputs.environment }}
+        REPORT_PREFIX: ${{ inputs.report-prefix }}
 
     - name: Post test results as GitHub PR comment
       if: ${{ (inputs.post-to == 'github' || inputs.post-to == 'both') && github.event_name == 'pull_request' }}
