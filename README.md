@@ -1,7 +1,7 @@
 # Playwright Report Publisher
 
-[![GitHub release](https://img.shields.io/github/release/speechify/playwright-report-publisher.svg)](https://github.com/speechify/playwright-report-publisher/releases)
-[![License](https://img.shields.io/github/license/speechify/playwright-report-publisher.svg)](LICENSE)
+[![GitHub release](https://img.shields.io/github/release/lohani-mohit/playwright-report-publisher.svg)](https://github.com/lohani-mohit/playwright-report-publisher/releases)
+[![License](https://img.shields.io/github/license/lohani-mohit/playwright-report-publisher.svg)](LICENSE)
 
 A GitHub Action for publishing Playwright test reports to Google Cloud Storage (GCS), Slack, and GitHub PR comments.
 
@@ -25,7 +25,7 @@ This action is designed to be used after your Playwright tests have been run. It
   continue-on-error: true
 
 - name: Publish Playwright Report
-  uses: speechify/playwright-report-publisher@v1
+  uses: lohani-mohit/playwright-report-publisher@v1
   with:
     environment: "dev"
     report-prefix: "e2e-tests"
@@ -77,7 +77,7 @@ jobs:
         continue-on-error: true
 
       - name: Publish Playwright Report
-        uses: speechify/playwright-report-publisher@v1
+        uses: lohani-mohit/playwright-report-publisher@v1
         with:
           report-directory: "tests/playwright-report"
           environment: "dev"
@@ -159,7 +159,7 @@ You can customize this by forking the action and modifying the `generate-paths` 
 
 ```yaml
 - name: Publish Visual Comparison Test Reports
-  uses: speechify/playwright-report-publisher@v1
+  uses: lohani-mohit/playwright-report-publisher@v1
   with:
     report-directory: "visual-tests/playwright-report"
     environment: "prod"
@@ -185,7 +185,7 @@ jobs:
       # Steps to run your tests...
 
       - name: Publish Test Reports
-        uses: speechify/playwright-report-publisher@v1
+        uses: lohani-mohit/playwright-report-publisher@v1
         with:
           environment: "prod"
           report-prefix: "daily-tests"

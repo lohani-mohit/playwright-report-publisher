@@ -10,12 +10,8 @@ on:
   # Allow manual triggering
   workflow_dispatch:
     inputs:
-      test-tag:
-        description: "Test tag to run (e.g., @sanity, @regression, @visualcomparison)"
-        required: true
-        default: "@regression"
       environment:
-        description: "Environment to run tests against"
+        description: "Environment the tests were run against"
         required: true
         default: "dev"
         type: choice
@@ -23,6 +19,10 @@ on:
           - dev
           - preview
           - prod
+      report-prefix:
+        description: "Prefix for the report folder in GCS"
+        required: false
+        default: "e2e-tests"
 
 jobs:
   test:
@@ -56,7 +56,7 @@ jobs:
         continue-on-error: true
 
       - name: Publish Playwright Report
-        uses: your-username/playwright-report-publisher@v1
+        uses: lohani-mohit/playwright-report-publisher@v1
         with:
           report-directory: "tests/playwright-report"
           environment: "dev"

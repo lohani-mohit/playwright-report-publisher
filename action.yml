@@ -1,6 +1,6 @@
 name: "Playwright Report Publisher"
 description: "Publish Playwright test reports to GCS, Slack, and GitHub PR comments"
-author: "Speechify"
+author: "Mohit Lohani"
 branding:
   icon: "upload-cloud"
   color: "blue"
