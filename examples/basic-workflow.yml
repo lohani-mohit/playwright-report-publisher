@@ -1,0 +1,44 @@
+name: Playwright Tests
+
+on:
+  # Trigger the workflow on push or pull request events but only for the main branch
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+  # Allow manual triggering
+  workflow_dispatch:
+    inputs:
+      test-tag:
+        description: "Test tag to run (e.g., @sanity, @regression, @visualcomparison)"
+        required: true
+        default: "@regression"
+      environment:
+        description: "Environment to run tests against"
+        required: true
+        default: "dev"
+        type: choice
+        options:
+          - dev
+          - preview
+          - prod
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    name: Run Playwright Tests
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run Playwright tests and publish reports
+        uses: speechify/playwright-report-publisher@v1
+        with:
+          # Use workflow_dispatch inputs if available, otherwise use defaults
+          test-tag: ${{ github.event.inputs.test-tag || '@regression' }}
+          environment: ${{ github.event.inputs.environment || 'dev' }}
+          post-to: "both"
+          gcp-sa-key: ${{ secrets.GCP_SA_KEY }}
+          slack-webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
