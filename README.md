@@ -39,6 +39,7 @@ A GitHub Action for publishing Playwright test reports to Google Cloud Storage (
   uses: lohani-mohit/playwright-report-publisher@v2
   with:
     environment: "dev"
+    gcs-bucket: "your-gcs-bucket-name"
     gcs-path-prefix: "e2e-tests"
     gcp-sa-key: ${{ secrets.GCP_SA_KEY }}
     slack-webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
@@ -103,6 +104,7 @@ jobs:
           merge-blob-reports: "true"
           suite-name: "E2E Tests"
           test-status: ${{ needs.test.result == 'success' && 'passed' || 'failed' }}
+          gcs-bucket: "your-gcs-bucket-name"
           gcs-path-prefix: "e2e"
           environment: "preview"
           gcp-sa-key: ${{ secrets.GCP_SA_KEY }}
@@ -130,11 +132,12 @@ jobs:
 | Input | Required | Default | Description |
 |-------|----------|---------|-------------|
 | `upload-to-gcs` | No | `true` | Whether to upload the HTML report to GCS |
-| `gcs-bucket` | No | `website_playwright_reports` | GCS bucket name (without `gs://`) |
+| `gcs-bucket` | **Yes** (if uploading) | — | GCS bucket name (without `gs://`) |
 | `gcs-path-prefix` | No | `test-report` | Path prefix in bucket. Final: `{prefix}-{env}/{timestamp}/` |
 | `environment` | No | `dev` | Environment name (appended to GCS path) |
 | `gcp-sa-key` | No | — | GCP service account key JSON |
 | `gcp-project-id` | No | — | GCP project ID |
+| `report-base-url` | No | `https://storage.googleapis.com/{bucket}` | Custom base URL for report links (useful for CDN or custom domains) |
 
 ### Notifications
 
@@ -165,6 +168,7 @@ jobs:
 | `passed-tests` | Number of passed tests |
 | `failed-tests` | Number of failed tests |
 | `flaky-tests` | Number of flaky tests |
+| `skipped-tests` | Number of skipped tests |
 | `duration` | Total test duration in seconds |
 
 ---

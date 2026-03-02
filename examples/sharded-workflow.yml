@@ -70,6 +70,7 @@ jobs:
 
           # GCS
           environment: "preview"
+          gcs-bucket: ${{ vars.GCS_BUCKET }}
           gcs-path-prefix: "e2e-tests"
           gcp-sa-key: ${{ secrets.GCP_SA_KEY }}
 

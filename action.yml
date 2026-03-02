@@ -41,7 +41,7 @@ inputs:
   gcs-bucket:
     description: "GCS bucket name (without gs:// prefix)"
     required: false
-    default: "website_playwright_reports"
+    default: ""
   gcs-path-prefix:
     description: "Path prefix within the GCS bucket. Final path: {prefix}/{timestamp}/"
     required: false
@@ -56,6 +56,10 @@ inputs:
     default: ""
   gcp-project-id:
     description: "GCP project ID"
+    required: false
+    default: ""
+  report-base-url:
+    description: "Custom base URL for report links (e.g. https://reports.example.com). Defaults to https://storage.googleapis.com/{gcs-bucket}"
     required: false
     default: ""
 
@@ -102,6 +106,9 @@ outputs:
   flaky-tests:
     description: "Number of flaky tests"
     value: ${{ steps.parse-results.outputs.flaky }}
+  skipped-tests:
+    description: "Number of skipped tests"
+    value: ${{ steps.parse-results.outputs.skipped }}
   duration:
     description: "Total test duration in seconds"
     value: ${{ steps.parse-results.outputs.duration }}
@@ -132,19 +139,25 @@ runs:
       run: |
         REPORT_JSON="${{ inputs.report-directory }}/pw_report.json"
         if [ -f "$REPORT_JSON" ]; then
-          TOTAL=$(node -e "const r=JSON.parse(require('fs').readFileSync('$REPORT_JSON','utf8')); console.log(r.stats.expected + r.stats.unexpected + r.stats.flaky)")
-          PASSED=$(node -e "const r=JSON.parse(require('fs').readFileSync('$REPORT_JSON','utf8')); console.log(r.stats.expected)")
-          FAILED=$(node -e "const r=JSON.parse(require('fs').readFileSync('$REPORT_JSON','utf8')); console.log(r.stats.unexpected)")
-          FLAKY=$(node -e "const r=JSON.parse(require('fs').readFileSync('$REPORT_JSON','utf8')); console.log(r.stats.flaky)")
-          DURATION=$(node -e "const r=JSON.parse(require('fs').readFileSync('$REPORT_JSON','utf8')); console.log((r.stats.duration / 1000).toFixed(2))")
+          eval "$(node -e "
+            const r = JSON.parse(require('fs').readFileSync('$REPORT_JSON', 'utf8'));
+            const s = r.stats;
+            console.log('TOTAL=' + (s.expected + s.unexpected + s.flaky + (s.skipped || 0)));
+            console.log('PASSED=' + s.expected);
+            console.log('FAILED=' + s.unexpected);
+            console.log('FLAKY=' + s.flaky);
+            console.log('SKIPPED=' + (s.skipped || 0));
+            console.log('DURATION=' + (s.duration / 1000).toFixed(2));
+          ")"
         else
           echo "::warning::No pw_report.json found at $REPORT_JSON — test stats will be unavailable"
-          TOTAL=0; PASSED=0; FAILED=0; FLAKY=0; DURATION="0"
+          TOTAL=0; PASSED=0; FAILED=0; FLAKY=0; SKIPPED=0; DURATION="0"
         fi
         echo "total=$TOTAL" >> $GITHUB_OUTPUT
         echo "passed=$PASSED" >> $GITHUB_OUTPUT
         echo "failed=$FAILED" >> $GITHUB_OUTPUT
         echo "flaky=$FLAKY" >> $GITHUB_OUTPUT
+        echo "skipped=$SKIPPED" >> $GITHUB_OUTPUT
         echo "duration=$DURATION" >> $GITHUB_OUTPUT
 
     # ── Step 3: Determine test status ──────────────────────────────────────
@@ -175,6 +188,15 @@ runs:
       with:
         project_id: ${{ inputs.gcp-project-id }}
 
+    - name: Validate GCS configuration
+      if: inputs.upload-to-gcs == 'true' && inputs.gcp-sa-key != ''
+      shell: bash
+      run: |
+        if [ -z "${{ inputs.gcs-bucket }}" ]; then
+          echo "::error::gcs-bucket is required when upload-to-gcs is true"
+          exit 1
+        fi
+
     - name: Generate paths and upload to GCS
       id: generate-paths
       if: inputs.upload-to-gcs == 'true' && inputs.gcp-sa-key != ''
@@ -184,7 +206,13 @@ runs:
         TIMESTAMP=$(date +%s)
         GCS_DIR="${{ inputs.gcs-path-prefix }}-${{ inputs.environment }}/${TIMESTAMP}"
         GCS_PATH="gs://${{ inputs.gcs-bucket }}/${GCS_DIR}"
-        REPORT_URL="https://storage.googleapis.com/${{ inputs.gcs-bucket }}/${GCS_DIR}/index.html"
+
+        BASE_URL="${{ inputs.report-base-url }}"
+        if [ -z "$BASE_URL" ]; then
+          BASE_URL="https://storage.googleapis.com/${{ inputs.gcs-bucket }}"
+        fi
+        BASE_URL="${BASE_URL%/}"
+        REPORT_URL="${BASE_URL}/${GCS_DIR}/index.html"
 
         REPORT_DIR="${{ inputs.report-directory }}"
         if [ -d "${REPORT_DIR}/html-report" ]; then
@@ -222,6 +250,7 @@ runs:
         PASSED_TESTS: ${{ steps.parse-results.outputs.passed }}
         FAILED_TESTS: ${{ steps.parse-results.outputs.failed }}
         FLAKY_TESTS: ${{ steps.parse-results.outputs.flaky }}
+        SKIPPED_TESTS: ${{ steps.parse-results.outputs.skipped }}
         DURATION: ${{ steps.parse-results.outputs.duration }}
         GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
@@ -241,6 +270,7 @@ runs:
         PASSED_TESTS: ${{ steps.parse-results.outputs.passed }}
         FAILED_TESTS: ${{ steps.parse-results.outputs.failed }}
         FLAKY_TESTS: ${{ steps.parse-results.outputs.flaky }}
+        SKIPPED_TESTS: ${{ steps.parse-results.outputs.skipped }}
         DURATION: ${{ steps.parse-results.outputs.duration }}
 
     # ── Step 7: GitHub step summary ────────────────────────────────────────
@@ -254,6 +284,7 @@ runs:
         PASSED_TESTS: ${{ steps.parse-results.outputs.passed }}
         FAILED_TESTS: ${{ steps.parse-results.outputs.failed }}
         FLAKY_TESTS: ${{ steps.parse-results.outputs.flaky }}
+        SKIPPED_TESTS: ${{ steps.parse-results.outputs.skipped }}
         DURATION: ${{ steps.parse-results.outputs.duration }}
         REPORT_URL: ${{ steps.generate-paths.outputs.report-url }}
       run: |
@@ -274,6 +305,7 @@ runs:
         | Passed ✅ | ${PASSED_TESTS} |
         | Failed ❌ | ${FAILED_TESTS} |
         | Flaky ⚠️ | ${FLAKY_TESTS} |
+        | Skipped ⏭️ | ${SKIPPED_TESTS} |
         | Duration | ${DURATION}s |
 
         EOF

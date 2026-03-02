@@ -14,6 +14,7 @@ const {
   PASSED_TESTS,
   FAILED_TESTS,
   FLAKY_TESTS,
+  SKIPPED_TESTS,
   DURATION,
   GITHUB_RUN_URL,
   GITHUB_REPOSITORY,
@@ -24,8 +25,11 @@ const {
 const failed = parseInt(FAILED_TESTS, 10) || 0;
 const passed = parseInt(PASSED_TESTS, 10) || 0;
 const flaky = parseInt(FLAKY_TESTS, 10) || 0;
+const skipped = parseInt(SKIPPED_TESTS, 10) || 0;
 const total = parseInt(TOTAL_TESTS, 10) || 0;
 const hasFailed = failed > 0 || TEST_STATUS === "failed";
+
+const REQUEST_TIMEOUT_MS = 30000;
 
 function shouldNotify() {
   const mode = (SLACK_NOTIFY_MODE || "always").toLowerCase();
@@ -74,11 +78,14 @@ if (total > 0) {
   const fields = [
     { type: "mrkdwn", text: `*Total Tests:*\n${total}` },
     { type: "mrkdwn", text: `*Duration:*\n${DURATION || "N/A"}s` },
-    { type: "mrkdwn", text: `*Passed ✅:*\n${passed + flaky}` },
+    { type: "mrkdwn", text: `*Passed ✅:*\n${passed}` },
     { type: "mrkdwn", text: `*Failed ❌:*\n${failed}` },
   ];
   if (flaky > 0) {
     fields.push({ type: "mrkdwn", text: `*Flaky ⚠️:*\n${flaky}` });
+  }
+  if (skipped > 0) {
+    fields.push({ type: "mrkdwn", text: `*Skipped ⏭️:*\n${skipped}` });
   }
   fields.push({
     type: "mrkdwn",
@@ -146,6 +153,10 @@ const req = https.request(options, (res) => {
       process.exit(1);
     }
   });
+});
+
+req.setTimeout(REQUEST_TIMEOUT_MS, () => {
+  req.destroy(new Error(`Request timed out after ${REQUEST_TIMEOUT_MS}ms`));
 });
 
 req.on("error", (err) => {

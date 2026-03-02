@@ -13,6 +13,7 @@ const {
   PASSED_TESTS,
   FAILED_TESTS,
   FLAKY_TESTS,
+  SKIPPED_TESTS,
   DURATION,
 } = process.env;
 
@@ -24,10 +25,13 @@ if (!PULL_REQUEST_NUMBER || !GITHUB_REPOSITORY) {
 const failed = parseInt(FAILED_TESTS, 10) || 0;
 const passed = parseInt(PASSED_TESTS, 10) || 0;
 const flaky = parseInt(FLAKY_TESTS, 10) || 0;
+const skipped = parseInt(SKIPPED_TESTS, 10) || 0;
 const total = parseInt(TOTAL_TESTS, 10) || 0;
 const duration = DURATION || "N/A";
 const suiteName = SUITE_NAME || "Playwright";
 const statusEmoji = TEST_STATUS === "passed" ? "✅" : "❌";
+
+const REQUEST_TIMEOUT_MS = 30000;
 
 let commentBody = `## ${statusEmoji} ${suiteName} Test Results\n\n`;
 
@@ -39,6 +43,9 @@ if (total > 0) {
   commentBody += `| Failed ❌ | ${failed} |\n`;
   if (flaky > 0) {
     commentBody += `| Flaky ⚠️ | ${flaky} |\n`;
+  }
+  if (skipped > 0) {
+    commentBody += `| Skipped ⏭️ | ${skipped} |\n`;
   }
   commentBody += `| Duration | ${duration}s |\n\n`;
 } else {
@@ -76,14 +83,23 @@ function makeRequest(method, path, body) {
       let responseData = "";
       res.on("data", (chunk) => (responseData += chunk));
       res.on("end", () => {
+        const parsed = {
+          statusCode: res.statusCode,
+          headers: res.headers,
+          body: JSON.parse(responseData || "{}"),
+        };
         if (res.statusCode >= 400) {
           reject(
             new Error(`GitHub API ${res.statusCode}: ${responseData}`),
           );
         } else {
-          resolve(JSON.parse(responseData || "{}"));
+          resolve(parsed);
         }
       });
+    });
+
+    req.setTimeout(REQUEST_TIMEOUT_MS, () => {
+      req.destroy(new Error(`Request timed out after ${REQUEST_TIMEOUT_MS}ms`));
     });
 
     req.on("error", reject);
@@ -92,12 +108,28 @@ function makeRequest(method, path, body) {
   });
 }
 
+async function fetchAllComments() {
+  const comments = [];
+  let page = 1;
+
+  while (true) {
+    const res = await makeRequest(
+      "GET",
+      `/repos/${owner}/${repo}/issues/${PULL_REQUEST_NUMBER}/comments?per_page=100&page=${page}`,
+    );
+    comments.push(...(Array.isArray(res.body) ? res.body : []));
+
+    const link = res.headers.link || "";
+    if (!link.includes('rel="next"')) break;
+    page++;
+  }
+
+  return comments;
+}
+
 async function main() {
   try {
-    const comments = await makeRequest(
-      "GET",
-      `/repos/${owner}/${repo}/issues/${PULL_REQUEST_NUMBER}/comments?per_page=100`,
-    );
+    const comments = await fetchAllComments();
 
     const existing = comments.find(
       (c) => c.body && c.body.includes(COMMENT_MARKER),

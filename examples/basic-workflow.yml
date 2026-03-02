@@ -38,6 +38,7 @@ jobs:
         with:
           working-directory: tests
           environment: ${{ inputs.environment || 'dev' }}
+          gcs-bucket: ${{ vars.GCS_BUCKET }}
           gcs-path-prefix: "e2e-tests"
           post-to: "both"
           gcp-sa-key: ${{ secrets.GCP_SA_KEY }}
