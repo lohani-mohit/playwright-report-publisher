@@ -253,10 +253,11 @@ PR comments include a test stats table and are **auto-updating** — if the acti
     slack-webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
     test-status: ${{ steps.tests.outcome == 'success' && 'passed' || 'failed' }}
 
-# v2 (drop-in compatible, just change the tag)
+# v2
 - uses: lohani-mohit/playwright-report-publisher@v2
   with:
     environment: "dev"
+    gcs-bucket: "your-gcs-bucket-name"  # NEW: now required when uploading
     gcs-path-prefix: "e2e-tests"        # renamed from report-prefix
     gcp-sa-key: ${{ secrets.GCP_SA_KEY }}
     slack-webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
