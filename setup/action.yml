@@ -1,0 +1,65 @@
+name: "Playwright Setup"
+description: "Setup Node.js, install dependencies, cache and install Playwright browsers"
+author: "Mohit Lohani"
+
+branding:
+  icon: "settings"
+  color: "blue"
+
+inputs:
+  working-directory:
+    description: "Working directory containing package.json and playwright config"
+    required: false
+    default: "."
+  node-version:
+    description: "Node.js version to use"
+    required: false
+    default: "20"
+  install-command:
+    description: "Command to install project dependencies"
+    required: false
+    default: "npm ci"
+  playwright-install-args:
+    description: "Additional args for playwright install (e.g. 'chromium' to install only one browser)"
+    required: false
+    default: ""
+
+runs:
+  using: "composite"
+  steps:
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    - name: Install dependencies
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: ${{ inputs.install-command }}
+
+    - name: Get Playwright version
+      id: pw-version
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        PW_VERSION=$(node -e "console.log(require('@playwright/test/package.json').version)")
+        echo "version=$PW_VERSION" >> $GITHUB_OUTPUT
+
+    - name: Cache Playwright browsers
+      uses: actions/cache@v4
+      id: pw-cache
+      with:
+        path: ~/.cache/ms-playwright
+        key: playwright-${{ runner.os }}-${{ steps.pw-version.outputs.version }}
+        restore-keys: playwright-${{ runner.os }}-
+
+    - name: Install Playwright browsers
+      if: steps.pw-cache.outputs.cache-hit != 'true'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: npx playwright install ${{ inputs.playwright-install-args }}
+
+    - name: Install Playwright system dependencies
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: npx playwright install-deps ${{ inputs.playwright-install-args }}

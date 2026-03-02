@@ -1,28 +1,18 @@
-name: Playwright Tests with Report Publishing
+name: Playwright Tests
 
 on:
-  # Trigger the workflow on push or pull request events but only for the main branch
   push:
     branches: [main]
   pull_request:
     branches: [main]
-
-  # Allow manual triggering
   workflow_dispatch:
     inputs:
       environment:
-        description: "Environment the tests were run against"
+        description: "Environment to test against"
         required: true
         default: "dev"
         type: choice
-        options:
-          - dev
-          - preview
-          - prod
-      report-prefix:
-        description: "Prefix for the report folder in GCS"
-        required: false
-        default: "e2e-tests"
+        options: [dev, preview, prod]
 
 jobs:
   test:
@@ -31,37 +21,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      # One-step Playwright setup: Node + deps + browser caching
+      - uses: lohani-mohit/playwright-report-publisher/setup@v2
         with:
+          working-directory: tests
           node-version: "20"
-          cache: "npm"
-          cache-dependency-path: "tests/package-lock.json"
-
-      - name: Install dependencies
-        run: |
-          cd tests
-          npm ci
-
-      - name: Install Playwright browsers
-        run: |
-          cd tests
-          npx playwright install --with-deps chromium
 
       - name: Run Playwright tests
         id: run-tests
-        run: |
-          cd tests
-          npx playwright test
+        working-directory: tests
+        run: npx playwright test
         continue-on-error: true
 
-      - name: Publish Playwright Report
-        uses: lohani-mohit/playwright-report-publisher@v1
+      - name: Publish Report
+        uses: lohani-mohit/playwright-report-publisher@v2
         with:
-          report-directory: "tests/playwright-report"
-          environment: "dev"
-          report-prefix: "e2e-tests"
+          working-directory: tests
+          environment: ${{ inputs.environment || 'dev' }}
+          gcs-path-prefix: "e2e-tests"
           post-to: "both"
           gcp-sa-key: ${{ secrets.GCP_SA_KEY }}
           slack-webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          slack-notify: "on-failure"
           test-status: ${{ steps.run-tests.outcome == 'success' && 'passed' || 'failed' }}

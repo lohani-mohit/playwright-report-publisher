@@ -1,0 +1,79 @@
+name: Playwright Tests (Sharded)
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: "Tests (${{ matrix.shardIndex }}/4)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shardIndex: [1, 2, 3, 4]
+        shardTotal: [4]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: lohani-mohit/playwright-report-publisher/setup@v2
+        with:
+          working-directory: tests
+          node-version: "20"
+          playwright-install-args: "chromium"
+
+      - name: Run Playwright tests
+        working-directory: tests
+        run: npx playwright test --project=chromium --shard=${{ matrix.shardIndex }}/${{ matrix.shardTotal }}
+
+      - name: Upload blob report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: blob-report-${{ matrix.shardIndex }}
+          path: tests/blob-report
+          retention-days: 1
+
+  report:
+    name: Publish Report
+    if: ${{ !cancelled() }}
+    needs: [test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Playwright (for merge-reports CLI)
+        working-directory: tests
+        run: npm ci
+
+      - uses: actions/download-artifact@v5
+        with:
+          path: tests/all-blob-reports
+          pattern: blob-report-*
+          merge-multiple: true
+
+      - name: Publish Report
+        uses: lohani-mohit/playwright-report-publisher@v2
+        with:
+          working-directory: tests
+          merge-blob-reports: "true"
+          blob-report-path: "all-blob-reports"
+          suite-name: "E2E Tests"
+          test-status: ${{ needs.test.result == 'success' && 'passed' || 'failed' }}
+
+          # GCS
+          environment: "preview"
+          gcs-path-prefix: "e2e-tests"
+          gcp-sa-key: ${{ secrets.GCP_SA_KEY }}
+
+          # Notifications
+          post-to: "both"
+          slack-webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          slack-notify: "on-failure"

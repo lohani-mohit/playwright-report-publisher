@@ -1,60 +1,64 @@
-# Playwright Report Publisher Action Structure
+# Playwright Report Publisher — Structure
 
-This document outlines the file and directory structure of the Playwright Report Publisher Action.
-
-## Directory Structure
+## Directory Layout
 
 ```
-playwright-report-publisher-action/
-├── action.yml                   # Main action definition
-├── LICENSE                      # MIT License file
-├── README.md                    # Documentation and usage instructions
-├── PUBLISHING.md                # Guide for publishing to GitHub Marketplace
-├── STRUCTURE.md                 # This file
-├── examples/                    # Example workflow files
-│   └── basic-workflow.yml       # Basic workflow example
-└── scripts/                     # JavaScript scripts for the action
-    ├── post-to-github.js        # Script to post results to GitHub PR comments
-    └── post-to-slack.js         # Script to post results to Slack
+playwright-report-publisher/
+├── action.yml                     # Main composite action (merge + GCS + Slack + PR + summary)
+├── setup/
+│   └── action.yml                 # Sub-action: Playwright environment setup
+├── scripts/
+│   ├── post-to-slack.js           # Slack notification (Block Kit, notification modes)
+│   └── post-to-github.js          # GitHub PR comment (auto-updating with stats table)
+├── examples/
+│   ├── basic-workflow.yml         # Simple single-run example
+│   └── sharded-workflow.yml       # Parallel shards with blob report merging
+├── README.md                      # Full documentation
+├── STRUCTURE.md                   # This file
+└── LICENSE                        # MIT
 ```
 
-## File Descriptions
+## Components
 
-### Main Files
+### `action.yml` — Report Publisher
 
-- **action.yml**: The core file that defines the GitHub Action, its inputs, outputs, and steps.
-- **LICENSE**: The MIT License file indicating the terms under which the action can be used.
-- **README.md**: Comprehensive documentation including features, usage examples, and input/output details.
-- **PUBLISHING.md**: Step-by-step guide on how to publish the action to GitHub Marketplace.
-- **STRUCTURE.md**: This file, explaining the organization of the codebase.
+The main composite action. Steps:
 
-### Examples
+1. **Merge blob reports** (optional) — combines sharded Playwright blob reports into HTML + JSON
+2. **Parse test results** — extracts pass/fail/flaky/duration stats from `pw_report.json`
+3. **Detect test status** — uses explicit input or auto-detects from report data
+4. **Upload to GCS** (optional) — authenticates with GCP and uploads the HTML report
+5. **Slack notification** — sends Block Kit message respecting the `slack-notify` mode
+6. **GitHub PR comment** — posts/updates a stats table comment on the pull request
+7. **GitHub step summary** — writes a results table to the Actions run summary
 
-- **examples/basic-workflow.yml**: A starter example of a GitHub workflow file using this action.
+### `setup/action.yml` — Playwright Setup
 
-### Scripts
+Sub-action for environment setup:
 
-- **scripts/post-to-github.js**: JavaScript script that parses test results and posts them as comments on GitHub pull requests.
-- **scripts/post-to-slack.js**: JavaScript script that formats test results and sends them to a Slack webhook.
+1. Setup Node.js (configurable version)
+2. Install project dependencies (configurable command)
+3. Cache Playwright browsers (keyed by Playwright version + OS)
+4. Install browsers (skipped on cache hit)
+5. Install system-level dependencies
 
-## How the Action Works
+### `scripts/post-to-slack.js`
 
-1. The action is defined in `action.yml`, which uses composite actions to coordinate multiple steps.
-2. When the action runs, it:
+Slack notification script using Block Kit format. Features:
 
-   - Sets up the environment (Node.js, Playwright)
-   - Runs the specified Playwright tests
-   - Uploads the test reports to Google Cloud Storage
-   - Uses the scripts to post results to Slack and/or GitHub PR comments
+- Header with status emoji and suite name
+- Fields grid: total, duration, passed, failed, flaky, environment
+- Context line: repo, branch, actor, commit message
+- Action buttons: "View Report" + "GitHub Run" links
+- Notification mode filtering (`always` / `on-failure` / `on-success` / `never`)
+- Zero external dependencies (uses Node.js built-in `https`)
 
-3. The scripts read the test report JSON to extract statistics and format messages.
+### `scripts/post-to-github.js`
 
-## Customizing the Action
+GitHub PR comment script. Features:
 
-You can customize this action by:
-
-1. Modifying `action.yml` to change the steps, inputs, or outputs
-2. Updating the scripts in the `scripts/` directory to change how results are formatted or posted
-3. Adding additional scripts for other notification channels or features
-
-All file paths in the action are relative to the repository root when the action is run.
+- Markdown table with test stats
+- Link to full HTML report
+- Auto-updating: uses HTML comment markers to find and update existing comments
+- Per-suite markers: multiple suites can post separate comments without conflicts
+- Zero external dependencies

@@ -1,149 +1,283 @@
 name: "Playwright Report Publisher"
-description: "Publish Playwright test reports to GCS, Slack, and GitHub PR comments"
+description: "Merge Playwright shard reports and publish to GCS, Slack, and GitHub PR comments"
 author: "Mohit Lohani"
+
 branding:
   icon: "upload-cloud"
   color: "blue"
 
 inputs:
-  report-directory:
-    description: "Directory containing the Playwright report"
-    required: false
-    default: "playwright-report"
-  environment:
-    description: "Environment the tests were run against"
-    required: true
-    default: "dev"
-  post-to:
-    description: "Where to post the results (github, slack, both, or none)"
-    required: false
-    default: "both"
+  # Report options
   working-directory:
-    description: "Directory containing Playwright tests"
+    description: "Working directory containing Playwright tests"
     required: false
     default: "tests"
+  report-directory:
+    description: "Directory containing the Playwright HTML report (used when merge-blob-reports is false)"
+    required: false
+    default: "playwright-report"
+  merge-blob-reports:
+    description: "Whether to merge sharded blob reports into HTML + JSON before publishing"
+    required: false
+    default: "false"
+  blob-report-path:
+    description: "Path to blob reports directory (relative to working-directory). Used when merge-blob-reports is true"
+    required: false
+    default: "all-blob-reports"
+  suite-name:
+    description: "Name of the test suite (shown in Slack, PR comments, and step summary)"
+    required: false
+    default: "Playwright"
+  test-status:
+    description: "Test result status: 'passed', 'failed', or 'cancelled'. Auto-detected from report if not provided"
+    required: false
+    default: ""
+
+  # GCS options
+  upload-to-gcs:
+    description: "Whether to upload the HTML report to GCS"
+    required: false
+    default: "true"
   gcs-bucket:
-    description: "GCS bucket name for uploading reports"
+    description: "GCS bucket name (without gs:// prefix)"
     required: false
     default: "website_playwright_reports"
-  report-prefix:
-    description: "Prefix for the report folder in GCS (e.g., 'regression', 'sanity')"
+  gcs-path-prefix:
+    description: "Path prefix within the GCS bucket. Final path: {prefix}/{timestamp}/"
     required: false
     default: "test-report"
-  github-token:
-    description: "GitHub token for PR comments"
-    required: true
-    default: ${{ github.token }}
+  environment:
+    description: "Environment name (appended to GCS path: {prefix}-{env}/{timestamp}/)"
+    required: false
+    default: "dev"
   gcp-sa-key:
     description: "GCP service account key (JSON) for GCS uploads"
-    required: true
+    required: false
+    default: ""
+  gcp-project-id:
+    description: "GCP project ID"
+    required: false
+    default: ""
+
+  # Notification targets
+  post-to:
+    description: "Where to post results: 'github', 'slack', 'both', or 'none'"
+    required: false
+    default: "both"
+  slack-notify:
+    description: "When to send Slack alerts: 'always', 'on-failure', 'on-success', 'never'"
+    required: false
+    default: "always"
   slack-webhook-url:
-    description: "Slack webhook URL for posting results"
+    description: "Slack incoming webhook URL"
     required: false
-  test-status:
-    description: "Status of the tests (passed or failed). If not provided, will be determined from the report."
+    default: ""
+  github-token:
+    description: "GitHub token for PR comments"
     required: false
+    default: ${{ github.token }}
+
+  # Step summary
+  github-step-summary:
+    description: "Whether to write a GitHub Actions step summary"
+    required: false
+    default: "true"
 
 outputs:
   report-url:
     description: "URL to the published Playwright report"
     value: ${{ steps.generate-paths.outputs.report-url }}
   test-status:
-    description: "Status of the tests (passed or failed)"
+    description: "Status of the tests (passed/failed/cancelled)"
     value: ${{ steps.check-status.outputs.status }}
+  total-tests:
+    description: "Total number of tests"
+    value: ${{ steps.parse-results.outputs.total }}
+  passed-tests:
+    description: "Number of passed tests"
+    value: ${{ steps.parse-results.outputs.passed }}
+  failed-tests:
+    description: "Number of failed tests"
+    value: ${{ steps.parse-results.outputs.failed }}
+  flaky-tests:
+    description: "Number of flaky tests"
+    value: ${{ steps.parse-results.outputs.flaky }}
+  duration:
+    description: "Total test duration in seconds"
+    value: ${{ steps.parse-results.outputs.duration }}
 
 runs:
   using: "composite"
   steps:
-    - name: Setup GCP authentication
-      uses: google-github-actions/auth@v1
-      with:
-        credentials_json: ${{ inputs.gcp-sa-key }}
-
-    - name: Set up Google Cloud SDK
-      uses: google-github-actions/setup-gcloud@v1
-
-    - name: Generate timestamp and report path
-      id: generate-paths
+    # ── Step 1: Merge blob reports (optional) ──────────────────────────────
+    - name: Merge blob reports into HTML
+      if: inputs.merge-blob-reports == 'true'
       shell: bash
-      run: |
-        TIMESTAMP=$(date +%s)
-        ENV="${{ inputs.environment }}"
-        PREFIX="${{ inputs.report-prefix }}"
+      working-directory: ${{ inputs.working-directory }}
+      run: npx playwright merge-reports --reporter html ./${{ inputs.blob-report-path }}
 
-        # Set GCS path
-        GCS_PATH="gs://${{ inputs.gcs-bucket }}/${PREFIX}-${ENV}/${TIMESTAMP}"
-        REPORT_URL="https://storage.googleapis.com/${{ inputs.gcs-bucket }}/${PREFIX}-${ENV}/${TIMESTAMP}/index.html"
-
-        echo "timestamp=${TIMESTAMP}" >> $GITHUB_OUTPUT
-        echo "gcs-path=${GCS_PATH}" >> $GITHUB_OUTPUT
-        echo "report-url=${REPORT_URL}" >> $GITHUB_OUTPUT
-
-    - name: Upload Playwright report to GCS
+    - name: Merge blob reports into JSON
+      if: inputs.merge-blob-reports == 'true'
       shell: bash
+      working-directory: ${{ inputs.working-directory }}
       run: |
-        cd ${{ inputs.working-directory }}
-        if [ -d "${{ inputs.report-directory }}/html-report" ]; then
-          gsutil -m cp -r ${{ inputs.report-directory }}/html-report/* ${{ steps.generate-paths.outputs.gcs-path }}
+        mkdir -p ${{ inputs.report-directory }}
+        npx playwright merge-reports --reporter json ./${{ inputs.blob-report-path }} > ${{ inputs.report-directory }}/pw_report.json
+
+    # ── Step 2: Parse test results from JSON report ────────────────────────
+    - name: Parse test results
+      id: parse-results
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        REPORT_JSON="${{ inputs.report-directory }}/pw_report.json"
+        if [ -f "$REPORT_JSON" ]; then
+          TOTAL=$(node -e "const r=JSON.parse(require('fs').readFileSync('$REPORT_JSON','utf8')); console.log(r.stats.expected + r.stats.unexpected + r.stats.flaky)")
+          PASSED=$(node -e "const r=JSON.parse(require('fs').readFileSync('$REPORT_JSON','utf8')); console.log(r.stats.expected)")
+          FAILED=$(node -e "const r=JSON.parse(require('fs').readFileSync('$REPORT_JSON','utf8')); console.log(r.stats.unexpected)")
+          FLAKY=$(node -e "const r=JSON.parse(require('fs').readFileSync('$REPORT_JSON','utf8')); console.log(r.stats.flaky)")
+          DURATION=$(node -e "const r=JSON.parse(require('fs').readFileSync('$REPORT_JSON','utf8')); console.log((r.stats.duration / 1000).toFixed(2))")
         else
-          gsutil -m cp -r ${{ inputs.report-directory }}/* ${{ steps.generate-paths.outputs.gcs-path }}
+          echo "::warning::No pw_report.json found at $REPORT_JSON — test stats will be unavailable"
+          TOTAL=0; PASSED=0; FAILED=0; FLAKY=0; DURATION="0"
         fi
-        echo "Report uploaded to: ${{ steps.generate-paths.outputs.report-url }}"
+        echo "total=$TOTAL" >> $GITHUB_OUTPUT
+        echo "passed=$PASSED" >> $GITHUB_OUTPUT
+        echo "failed=$FAILED" >> $GITHUB_OUTPUT
+        echo "flaky=$FLAKY" >> $GITHUB_OUTPUT
+        echo "duration=$DURATION" >> $GITHUB_OUTPUT
 
+    # ── Step 3: Determine test status ──────────────────────────────────────
     - name: Check test status
       id: check-status
       shell: bash
       run: |
-        cd ${{ inputs.working-directory }}
-
-        # If test status is provided as input, use that
         if [ -n "${{ inputs.test-status }}" ]; then
           echo "status=${{ inputs.test-status }}" >> $GITHUB_OUTPUT
-          exit 0
-        fi
-
-        # Otherwise determine from report
-        if [ -f "${{ inputs.report-directory }}/pw_report.json" ]; then
-          if grep -q '"status":"failed"' ${{ inputs.report-directory }}/pw_report.json; then
-            echo "status=failed" >> $GITHUB_OUTPUT
-          else
-            echo "status=passed" >> $GITHUB_OUTPUT
-          fi
+        elif [ "${{ steps.parse-results.outputs.failed }}" -gt 0 ] 2>/dev/null; then
+          echo "status=failed" >> $GITHUB_OUTPUT
+        elif [ "${{ steps.parse-results.outputs.total }}" -gt 0 ] 2>/dev/null; then
+          echo "status=passed" >> $GITHUB_OUTPUT
         else
           echo "status=unknown" >> $GITHUB_OUTPUT
-          echo "Warning: Could not determine test status from report"
         fi
 
+    # ── Step 4: GCS upload ─────────────────────────────────────────────────
+    - name: Setup GCP authentication
+      if: inputs.upload-to-gcs == 'true' && inputs.gcp-sa-key != ''
+      uses: google-github-actions/auth@v2
+      with:
+        credentials_json: ${{ inputs.gcp-sa-key }}
+
+    - name: Set up Google Cloud SDK
+      if: inputs.upload-to-gcs == 'true' && inputs.gcp-sa-key != ''
+      uses: google-github-actions/setup-gcloud@v2
+      with:
+        project_id: ${{ inputs.gcp-project-id }}
+
+    - name: Generate paths and upload to GCS
+      id: generate-paths
+      if: inputs.upload-to-gcs == 'true' && inputs.gcp-sa-key != ''
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        TIMESTAMP=$(date +%s)
+        GCS_DIR="${{ inputs.gcs-path-prefix }}-${{ inputs.environment }}/${TIMESTAMP}"
+        GCS_PATH="gs://${{ inputs.gcs-bucket }}/${GCS_DIR}"
+        REPORT_URL="https://storage.googleapis.com/${{ inputs.gcs-bucket }}/${GCS_DIR}/index.html"
+
+        REPORT_DIR="${{ inputs.report-directory }}"
+        if [ -d "${REPORT_DIR}/html-report" ]; then
+          gsutil -m cp -r "${REPORT_DIR}/html-report/*" "${GCS_PATH}"
+        else
+          gsutil -m cp -r "${REPORT_DIR}/*" "${GCS_PATH}"
+        fi
+
+        echo "report-url=${REPORT_URL}" >> $GITHUB_OUTPUT
+        echo "Report uploaded to: ${REPORT_URL}"
+
+    # ── Step 5: Slack notification ─────────────────────────────────────────
     - name: Get last commit message
       id: get-commit
-      if: ${{ inputs.post-to == 'slack' || inputs.post-to == 'both' }}
+      if: inputs.post-to == 'slack' || inputs.post-to == 'both'
       shell: bash
       run: |
-        LAST_COMMIT_MSG=$(git log -1 --pretty=format:'%s')
+        LAST_COMMIT_MSG=$(git log -1 --pretty=format:'%s' 2>/dev/null || echo "N/A")
         echo "last-commit=${LAST_COMMIT_MSG}" >> $GITHUB_OUTPUT
 
     - name: Post test results to Slack
-      if: ${{ (inputs.post-to == 'slack' || inputs.post-to == 'both') && inputs.slack-webhook-url != '' }}
+      if: (inputs.post-to == 'slack' || inputs.post-to == 'both') && inputs.slack-webhook-url != ''
       shell: bash
-      run: |
-        cd ${{ inputs.working-directory }}
-        node ${{ github.action_path }}/scripts/post-to-slack.js
+      working-directory: ${{ inputs.working-directory }}
+      run: node ${{ github.action_path }}/scripts/post-to-slack.js
       env:
         SLACK_WEBHOOK_URL: ${{ inputs.slack-webhook-url }}
+        SLACK_NOTIFY_MODE: ${{ inputs.slack-notify }}
         REPORT_URL: ${{ steps.generate-paths.outputs.report-url }}
         LAST_COMMIT_MSG: ${{ steps.get-commit.outputs.last-commit }}
         TEST_STATUS: ${{ steps.check-status.outputs.status }}
         ENVIRONMENT: ${{ inputs.environment }}
-        REPORT_PREFIX: ${{ inputs.report-prefix }}
+        SUITE_NAME: ${{ inputs.suite-name }}
+        TOTAL_TESTS: ${{ steps.parse-results.outputs.total }}
+        PASSED_TESTS: ${{ steps.parse-results.outputs.passed }}
+        FAILED_TESTS: ${{ steps.parse-results.outputs.failed }}
+        FLAKY_TESTS: ${{ steps.parse-results.outputs.flaky }}
+        DURATION: ${{ steps.parse-results.outputs.duration }}
+        GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
+    # ── Step 6: GitHub PR comment ──────────────────────────────────────────
     - name: Post test results as GitHub PR comment
-      if: ${{ (inputs.post-to == 'github' || inputs.post-to == 'both') && github.event_name == 'pull_request' }}
+      if: (inputs.post-to == 'github' || inputs.post-to == 'both') && github.event_name == 'pull_request'
       shell: bash
-      run: |
-        cd ${{ inputs.working-directory }}
-        node ${{ github.action_path }}/scripts/post-to-github.js
+      working-directory: ${{ inputs.working-directory }}
+      run: node ${{ github.action_path }}/scripts/post-to-github.js
       env:
         GITHUB_TOKEN: ${{ inputs.github-token }}
         REPORT_URL: ${{ steps.generate-paths.outputs.report-url }}
         TEST_STATUS: ${{ steps.check-status.outputs.status }}
         PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number }}
+        SUITE_NAME: ${{ inputs.suite-name }}
+        TOTAL_TESTS: ${{ steps.parse-results.outputs.total }}
+        PASSED_TESTS: ${{ steps.parse-results.outputs.passed }}
+        FAILED_TESTS: ${{ steps.parse-results.outputs.failed }}
+        FLAKY_TESTS: ${{ steps.parse-results.outputs.flaky }}
+        DURATION: ${{ steps.parse-results.outputs.duration }}
+
+    # ── Step 7: GitHub step summary ────────────────────────────────────────
+    - name: Write GitHub step summary
+      if: inputs.github-step-summary == 'true'
+      shell: bash
+      env:
+        TEST_STATUS: ${{ steps.check-status.outputs.status }}
+        SUITE_NAME: ${{ inputs.suite-name }}
+        TOTAL_TESTS: ${{ steps.parse-results.outputs.total }}
+        PASSED_TESTS: ${{ steps.parse-results.outputs.passed }}
+        FAILED_TESTS: ${{ steps.parse-results.outputs.failed }}
+        FLAKY_TESTS: ${{ steps.parse-results.outputs.flaky }}
+        DURATION: ${{ steps.parse-results.outputs.duration }}
+        REPORT_URL: ${{ steps.generate-paths.outputs.report-url }}
+      run: |
+        if [ "$TEST_STATUS" == "failed" ]; then
+          STATUS_ICON="❌ Tests Failed"
+        elif [ "$TEST_STATUS" == "cancelled" ]; then
+          STATUS_ICON="⚠️ Tests Cancelled"
+        else
+          STATUS_ICON="✅ Tests Passed"
+        fi
+
+        cat >> $GITHUB_STEP_SUMMARY << EOF
+        ## ${STATUS_ICON} — ${SUITE_NAME}
+
+        | Metric | Value |
+        |--------|-------|
+        | Total Tests | ${TOTAL_TESTS} |
+        | Passed ✅ | ${PASSED_TESTS} |
+        | Failed ❌ | ${FAILED_TESTS} |
+        | Flaky ⚠️ | ${FLAKY_TESTS} |
+        | Duration | ${DURATION}s |
+
+        EOF
+
+        if [ -n "$REPORT_URL" ]; then
+          echo "**📊 Report:** [View full report](${REPORT_URL})" >> $GITHUB_STEP_SUMMARY
+        fi
